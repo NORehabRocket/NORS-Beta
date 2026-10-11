@@ -29,6 +29,11 @@ namespace NORS.Plugin
         private readonly VoiceCapture _capture = new VoiceCapture();
         private readonly VoicePlayback _playback = new VoicePlayback();
         private HostBanStore _hostBans;
+        private readonly MuteStore _mutes = new MuteStore();
+        private readonly Packets.MuteEntry[] _muteWire = new Packets.MuteEntry[Packets.MaxMutes];
+        private int _appliedMuteRevision = -1;
+        /// <summary>So lifting the last mute still sends one empty list, clearing it on peers.</summary>
+        private int _lastMuteCountSent;
         private PlayerVolumes _playerVols;
         private float _nextVolRosterSync;
         private readonly ModerationAuthority _moderation = new ModerationAuthority();
@@ -92,6 +97,24 @@ namespace NORS.Plugin
                 OnHostBan = sid => { if (_hostBans.Add(sid)) { _appliedModRevision = -1; BroadcastBansNow(); } },
                 OnHostUnban = sid => { if (_hostBans.Remove(sid)) { _appliedModRevision = -1; BroadcastBansNow(); } },
                 IsBanned = sid => _hostBans.Contains(sid),
+                OnMute = (sid, secs) =>
+                {
+                    _mutes.Mute(sid, secs, "", Time.unscaledTime);
+                    _appliedMuteRevision = -1;
+                    BroadcastBansNow();
+                },
+                OnUnmute = sid =>
+                {
+                    if (_mutes.Unmute(sid)) { _appliedMuteRevision = -1; BroadcastBansNow(); }
+                },
+                // Shows our own mute first; falls back to one another moderator set, so a
+                // moderator can see a target is already handled instead of double-muting.
+                MuteRemaining = sid =>
+                {
+                    float t = Time.unscaledTime;
+                    float mine = _mutes.Remaining(sid, t);
+                    return mine > 0f ? mine : _moderation.RemoteMuteRemaining(sid, t);
+                },
                 GetPlayerVolume = (sid, name) => _playerVols.GetFor(sid, name),
                 SetPlayerVolume = (sid, name, g) => _playerVols.Set(sid, name, g),
                 MyClientId = _clientId,
@@ -312,11 +335,21 @@ namespace NORS.Plugin
             // player, so gating it on IsHost meant nobody sent bans and nobody applied them.
             _moderation.Sync(NorsConfig.Moderators.Value);
             bool amMod = CanModerate;
-            if (_moderation.Revision != _appliedModRevision || amMod != _appliedAsModerator)
+
+            // Expire first, so a mute that just ran out is gone from this frame's effective set
+            // rather than lingering until something else happens to bump a revision.
+            float modNow = Time.unscaledTime;
+            _mutes.Expire(modNow);
+            _moderation.ExpireMutes(modNow);
+
+            if (_moderation.Revision != _appliedModRevision
+                || _mutes.Revision != _appliedMuteRevision
+                || amMod != _appliedAsModerator)
             {
                 _appliedModRevision = _moderation.Revision;
+                _appliedMuteRevision = _mutes.Revision;
                 _appliedAsModerator = amMod;
-                _moderation.BuildEffective(_hostBans, amMod, _banScratch);
+                _moderation.BuildEffective(_hostBans, amMod, _banScratch, _mutes);
                 _p2p.SetIgnored(_banScratch);
             }
 
@@ -350,6 +383,7 @@ namespace NORS.Plugin
             _playback.Clear();
             _capture.SetActive(false);
             _moderation.ClearReceived();   // authorities are per-session
+            _mutes.Clear();                // and a temporary mute does not outlive the session
         }
 
         /// <summary>
@@ -366,6 +400,22 @@ namespace NORS.Plugin
             var mine = new List<ulong>();
             _hostBans.CopyTo(mine);
             _p2p.BroadcastBanList(mine.ToArray(), mine.Count);
+
+            // Mutes go out alongside, every time. The rebroadcast is what keeps the countdown
+            // honest on the other end and what gets a late joiner the mutes already running.
+            int n = _mutes.CopyToWire(_muteWire, Time.unscaledTime);
+            if (n > 0 || _lastMuteCountSent > 0) _p2p.BroadcastMuteList(_muteWire, n);
+            _lastMuteCountSent = n;
+        }
+
+        /// <summary>
+        /// A moderator's temporary mutes. Separate handler from bans because they expire: the
+        /// authority stores an absolute local expiry from the seconds-remaining on the wire, so no
+        /// clock agreement is needed between machines.
+        /// </summary>
+        private void OnMuteListReceived(ulong from, Packets.MuteEntry[] mutes)
+        {
+            _moderation.AcceptMutes(from, mutes, _local.RoomId, Time.unscaledTime);
         }
 
         private void OnHostBanListReceived(ulong from, ulong[] ids)
@@ -537,7 +587,7 @@ namespace NORS.Plugin
         {
             if (P2P)
             {
-                if (_p2pStarted) _p2p.Receive(ProcessIncoming, OnHostBanListReceived);
+                if (_p2pStarted) _p2p.Receive(ProcessIncoming, OnHostBanListReceived, OnMuteListReceived);
                 return;
             }
 

@@ -10,7 +10,7 @@ namespace NORS.Plugin
     public class NorsPlugin : BaseUnityPlugin
     {
         public const string Guid = "com.dsr.nors";
-        public const string Version = "0.7.9";
+        public const string Version = "0.7.10";
 
         internal static NorsPlugin Instance;
         internal static ManualLogSource Log;

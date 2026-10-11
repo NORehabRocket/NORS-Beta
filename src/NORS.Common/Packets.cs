@@ -183,6 +183,50 @@ namespace NORS.Common
 
         public static ulong[] ReadBanList(ref PacketReader r) => ReadIdList(ref r);
 
+        /// <summary>One temporary mute: who, how much longer, and why.</summary>
+        public struct MuteEntry
+        {
+            public ulong SteamId;
+            /// <summary>Seconds REMAINING, not an absolute expiry. Two machines' clocks don't have
+            /// to agree, and the periodic rebroadcast keeps it accurate as it counts down.</summary>
+            public ushort Seconds;
+            public string Reason;
+        }
+
+        /// <summary>Max mutes in one datagram. Well under what the MTU allows once reasons are counted.</summary>
+        public const int MaxMutes = 32;
+
+        public static void WriteMuteList(PacketWriter w, MuteEntry[] mutes, int count)
+        {
+            WriteHeader(w, PacketType.MuteList);
+            int n = System.Math.Min(count, MaxMutes);
+            w.Byte((byte)n);
+            for (int i = 0; i < n; i++)
+            {
+                w.ULong(mutes[i].SteamId);
+                w.UShort(mutes[i].Seconds);
+                string reason = mutes[i].Reason ?? "";
+                if (reason.Length > 48) reason = reason.Substring(0, 48);
+                w.Str(reason);
+            }
+        }
+
+        public static MuteEntry[] ReadMuteList(ref PacketReader r)
+        {
+            int n = r.Byte();
+            if (n > MaxMutes) n = MaxMutes;
+            var list = new System.Collections.Generic.List<MuteEntry>(n);
+            for (int i = 0; i < n; i++)
+            {
+                // A truncated or malformed datagram stops the read rather than throwing: 10 bytes
+                // is the fixed part (id + seconds), and Str needs at least its own length prefix.
+                if (r.Remaining < 11) break;
+                var e = new MuteEntry { SteamId = r.ULong(), Seconds = r.UShort(), Reason = r.Str() };
+                if (e.SteamId != 0) list.Add(e);
+            }
+            return list.ToArray();
+        }
+
         /// <summary>Shared count-prefixed id list read. The count is clamped to what the
         /// datagram actually contains so a malformed/truncated packet can't read past it.</summary>
         private static ulong[] ReadIdList(ref PacketReader r)

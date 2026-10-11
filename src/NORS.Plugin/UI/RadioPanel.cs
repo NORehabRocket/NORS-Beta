@@ -70,6 +70,11 @@ namespace NORS.Plugin.UI
         public Action<ulong> OnHostUnban;
         public Func<ulong, bool> IsBanned;
 
+        // Temporary mutes: the proportionate tool between "say nothing" and "ban forever".
+        public Action<ulong, float> OnMute;     // (steamId, seconds)
+        public Action<ulong> OnUnmute;
+        public Func<ulong, float> MuteRemaining;  // seconds left, 0 if not muted
+
         // Per-player listening volume. Local to this client — no moderator rights needed, and
         // nothing is sent to the player being adjusted.
         public Func<ulong, string, float> GetPlayerVolume;
@@ -299,9 +304,10 @@ namespace NORS.Plugin.UI
                             // P2P: the game host moderates by Steam id (mute/ban), no relay/vote.
                             if (CanModerate && p.SteamId != 0)
                             {
+                                DrawMuteControls(p.SteamId);
                                 bool banned = IsBanned != null && IsBanned(p.SteamId);
-                                if (!banned && GUILayout.Button("Ban", GUILayout.Width(50))) OnHostBan?.Invoke(p.SteamId);
-                                if (banned && GUILayout.Button("Unban", GUILayout.Width(58))) OnHostUnban?.Invoke(p.SteamId);
+                                if (!banned && GUILayout.Button("Ban", GUILayout.Width(44))) OnHostBan?.Invoke(p.SteamId);
+                                if (banned && GUILayout.Button("Unban", GUILayout.Width(54))) OnHostUnban?.Invoke(p.SteamId);
                             }
                         }
                         else
@@ -463,6 +469,36 @@ namespace NORS.Plugin.UI
         /// clicked, and a mute toggle. Local and instant — unlike Ban, it needs no moderator rights,
         /// which is the point: anyone can turn down a player who runs hot without kicking them.
         /// </summary>
+        /// <summary>
+        /// Timed mute controls for one player. Shows the countdown while a mute is running — a
+        /// moderator needs to see that somebody is already handled, or two of them stack mutes on
+        /// the same person and neither knows when it ends.
+        ///
+        /// Durations are the proportionate rungs between saying nothing and banning: cool off a
+        /// hot mic, sit out an argument, miss a round.
+        /// </summary>
+        private void DrawMuteControls(ulong steamId)
+        {
+            if (OnMute == null || MuteRemaining == null) return;
+
+            float left = MuteRemaining(steamId);
+            if (left > 0f)
+            {
+                int mins = Mathf.FloorToInt(left / 60f);
+                string label = mins >= 1 ? $"{mins}m" : $"{Mathf.CeilToInt(left)}s";
+                GUILayout.Label($"<color={Theme.Hex(Theme.Amber)}>MUTED {label}</color>",
+                    new GUIStyle(GUI.skin.label) { richText = true, alignment = TextAnchor.MiddleRight },
+                    GUILayout.Width(74));
+                if (GUILayout.Button("Unmute", GUILayout.Width(62))) OnUnmute?.Invoke(steamId);
+                return;
+            }
+
+            GUILayout.Label("mute", Theme.LabelDim, GUILayout.Width(32));
+            if (GUILayout.Button("5m", GUILayout.Width(32))) OnMute(steamId, 5f * 60f);
+            if (GUILayout.Button("15m", GUILayout.Width(36))) OnMute(steamId, 15f * 60f);
+            if (GUILayout.Button("60m", GUILayout.Width(36))) OnMute(steamId, 60f * 60f);
+        }
+
         private void DrawPlayerVolume(RosterEntry p) => DrawVolumeControls(p.SteamId, p.Name);
 
         /// <summary>

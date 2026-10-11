@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using NORS.Common;
 
 namespace NORS.Plugin.Net
 {
@@ -29,6 +30,22 @@ namespace NORS.Plugin.Net
         private readonly HashSet<ulong> _dedup = new HashSet<ulong>();
         private readonly List<ulong> _stale = new List<ulong>();
         private string _parsedFrom;
+
+        /// <summary>A temporary mute received from a moderator, with when it runs out on our clock.</summary>
+        private struct RemoteMute
+        {
+            public float ExpiresAt;
+            public string Reason;
+            public ulong From;
+        }
+
+        /// <summary>
+        /// Timed mutes, keyed by target rather than by issuer. Two moderators muting the same person
+        /// is one mute, and the later expiry wins — otherwise the shorter one ending would lift a
+        /// mute the other moderator still intends to be running.
+        /// </summary>
+        private readonly Dictionary<ulong, RemoteMute> _mutes = new Dictionary<ulong, RemoteMute>();
+        private readonly List<ulong> _expiredMutes = new List<ulong>();
 
         /// <summary>Bumped whenever the effective ban set could have changed, so the hub can
         /// rebuild only then instead of every frame.</summary>
@@ -62,6 +79,13 @@ namespace NORS.Plugin.Net
             foreach (var kv in _received) if (!IsAuthority(kv.Key, 0)) _stale.Add(kv.Key);
             foreach (ulong id in _stale) _received.Remove(id);
 
+            // And so must their timed mutes. Missing this meant revoking a moderator left their
+            // mutes running until they happened to expire — the one case where "it wears off"
+            // is exactly wrong, because you revoke trust precisely when you want it undone now.
+            _expiredMutes.Clear();
+            foreach (var kv in _mutes) if (!IsAuthority(kv.Value.From, 0)) _expiredMutes.Add(kv.Key);
+            foreach (ulong id in _expiredMutes) _mutes.Remove(id);
+
             if (_trusted.Count > 0)
                 NorsPlugin.Log.LogInfo($"NORS: honouring voice bans from {_trusted.Count} configured moderator(s).");
         }
@@ -94,8 +118,67 @@ namespace NORS.Plugin.Net
             return true;
         }
 
-        /// <summary>Everyone banned by any authority, plus this client's own list, unioned.</summary>
-        public void BuildEffective(HostBanStore own, bool ownIsAuthority, List<ulong> outList)
+        /// <summary>
+        /// Record a batch of timed mutes from an authority. Each is stored against an absolute local
+        /// expiry derived from the seconds-remaining on the wire, so peers' clocks never have to
+        /// agree and a rebroadcast simply refreshes the countdown.
+        /// </summary>
+        public bool AcceptMutes(ulong from, Packets.MuteEntry[] mutes, ulong hostId, float now)
+        {
+            if (!IsAuthority(from, hostId))
+            {
+                NorsPlugin.Log.LogWarning(
+                    $"NORS: ignored a voice mute list from {from} — not a configured moderator.");
+                return false;
+            }
+            if (mutes == null) return true;
+
+            // Mutes this authority previously set and has now dropped should lift, so clear ours
+            // from them first rather than letting a stale entry ride out its old expiry.
+            _expiredMutes.Clear();
+            foreach (var kv in _mutes) if (kv.Value.From == from) _expiredMutes.Add(kv.Key);
+            foreach (ulong id in _expiredMutes) _mutes.Remove(id);
+
+            foreach (var m in mutes)
+            {
+                if (m.SteamId == 0 || m.Seconds == 0) continue;
+                float expires = now + m.Seconds;
+                // Longest expiry wins when two moderators disagree (see _mutes doc).
+                if (_mutes.TryGetValue(m.SteamId, out var existing) && existing.ExpiresAt > expires) continue;
+                _mutes[m.SteamId] = new RemoteMute { ExpiresAt = expires, Reason = m.Reason, From = from };
+            }
+            Revision++;
+            return true;
+        }
+
+        /// <summary>Drops timed mutes that have run out. Bumps Revision only when something went.</summary>
+        public void ExpireMutes(float now)
+        {
+            if (_mutes.Count == 0) return;
+            _expiredMutes.Clear();
+            foreach (var kv in _mutes) if (kv.Value.ExpiresAt <= now) _expiredMutes.Add(kv.Key);
+            if (_expiredMutes.Count == 0) return;
+            foreach (ulong id in _expiredMutes) _mutes.Remove(id);
+            Revision++;
+        }
+
+        /// <summary>Seconds left on a mute another moderator set, or 0.</summary>
+        public float RemoteMuteRemaining(ulong steamId, float now)
+        {
+            if (!_mutes.TryGetValue(steamId, out var m)) return 0f;
+            float left = m.ExpiresAt - now;
+            return left > 0f ? left : 0f;
+        }
+
+        public string RemoteMuteReason(ulong steamId)
+        {
+            RemoteMute m;
+            return _mutes.TryGetValue(steamId, out m) ? m.Reason : null;
+        }
+
+        /// <summary>Everyone banned or muted by any authority, plus this client's own, unioned.</summary>
+        public void BuildEffective(HostBanStore own, bool ownIsAuthority, List<ulong> outList,
+                                   MuteStore ownMutes = null)
         {
             outList.Clear();
             _dedup.Clear();
@@ -104,12 +187,20 @@ namespace NORS.Plugin.Net
                 own.CopyTo(outList);
                 foreach (ulong id in outList) _dedup.Add(id);
             }
+            if (ownIsAuthority && ownMutes != null)
+            {
+                _stale.Clear();
+                ownMutes.CopyIdsTo(_stale);
+                foreach (ulong id in _stale) if (_dedup.Add(id)) outList.Add(id);
+            }
             foreach (var kv in _received)
                 foreach (ulong id in kv.Value)
                     if (_dedup.Add(id)) outList.Add(id);
+            foreach (var kv in _mutes)
+                if (_dedup.Add(kv.Key)) outList.Add(kv.Key);
         }
 
         /// <summary>Session-scoped: a new session must not inherit the last one's authorities.</summary>
-        public void ClearReceived() { _received.Clear(); Revision++; }
+        public void ClearReceived() { _received.Clear(); _mutes.Clear(); Revision++; }
     }
 }

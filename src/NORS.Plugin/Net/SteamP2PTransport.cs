@@ -167,6 +167,19 @@ namespace NORS.Plugin.Net
         {
             if (!Ready) return;
             Packets.WriteBanList(_w, ids, count);
+            SendToAllReliable();
+        }
+
+        /// <summary>Moderator broadcasts the current temporary mutes (reliable).</summary>
+        public void BroadcastMuteList(Packets.MuteEntry[] mutes, int count)
+        {
+            if (!Ready) return;
+            Packets.WriteMuteList(_w, mutes, count);
+            SendToAllReliable();
+        }
+
+        private void SendToAllReliable()
+        {
             for (int i = 0; i < _peers.Count; i++)
             {
                 ulong id = _peers[i];
@@ -181,7 +194,8 @@ namespace NORS.Plugin.Net
         /// A BanList is passed up WITH its sender id — deciding whose bans count is the hub's job now
         /// (see ModerationAuthority), because on a dedicated server there is no host to compare against.
         /// </summary>
-        public void Receive(Action<VoiceHeader> onVoice, Action<ulong, ulong[]> onBanList)
+        public void Receive(Action<VoiceHeader> onVoice, Action<ulong, ulong[]> onBanList,
+                            Action<ulong, Packets.MuteEntry[]> onMuteList = null)
         {
             if (!Ready) return;
             int guard = 0;
@@ -203,6 +217,12 @@ namespace NORS.Plugin.Net
                 else if (type == PacketType.BanList)
                 {
                     onBanList(from, Packets.ReadBanList(ref r));
+                }
+                else if (type == PacketType.MuteList)
+                {
+                    // Null when a caller predates mutes; the packet is then simply dropped, which
+                    // is the same thing an older client does with an unknown type.
+                    onMuteList?.Invoke(from, Packets.ReadMuteList(ref r));
                 }
             }
         }

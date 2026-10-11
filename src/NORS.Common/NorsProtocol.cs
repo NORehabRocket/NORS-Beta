@@ -84,6 +84,11 @@ namespace NORS.Common
         AdminResult = 14, // server -> client: auth/command outcome
         AdminCommand = 15, // client -> server: privileged kick/ban/unban
         BanList = 16,  // P2P only: game host -> peers, the set of muted/banned Steam ids to ignore
+        // P2P only: moderator -> peers, temporary mutes that expire on their own.
+        // Deliberately a separate type from BanList rather than an extension of it: a client that
+        // predates this ignores unknown types, so it simply doesn't honour timed mutes — whereas
+        // folding them into BanList would make an old client treat a ten-minute mute as permanent.
+        MuteList = 17,
     }
 
     public enum AdminOp : byte

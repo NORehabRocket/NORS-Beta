@@ -116,10 +116,22 @@ namespace NORS.Common
 
         public float Float() => BitConverter.Int32BitsToSingle((int)UInt());
 
+        /// <summary>
+        /// Length-prefixed UTF-8 string, clamped to what the datagram actually holds.
+        ///
+        /// The clamp matters: every voice frame carries a callsign read from an untrusted peer, so a
+        /// malformed or hostile packet declaring a 255-byte string near the end of the buffer would
+        /// otherwise read past the datagram — returning stale bytes from the previous packet at
+        /// best, and throwing out of the receive loop at worst.
+        /// </summary>
         public string Str()
         {
+            if (_pos >= _end) return string.Empty;
             int n = _b[_pos++];
             if (n == 0) return string.Empty;
+            int avail = _end - _pos;
+            if (n > avail) n = avail;
+            if (n <= 0) return string.Empty;
             string s = Encoding.UTF8.GetString(_b, _pos, n);
             _pos += n;
             return s;
