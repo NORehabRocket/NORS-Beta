@@ -40,6 +40,11 @@ namespace NORS.Plugin.UI
         public bool AdminAuthed;
         public bool LocalIsHost;
         public bool CanModerate;   // host OR a configured moderator
+        /// <summary>How many moderators THIS client honours — the number that decides whether
+        /// moderation does anything here, as opposed to whether someone has the buttons.</summary>
+        public int ModeratorCount;
+        /// <summary>" (from nors-moderators.txt)" when the drop-in file supplied them.</summary>
+        public string ModeratorSource = "";
         public string AdminPassword = "";
 
         // P2P mode (voice direct over Steam; host moderates by Steam id, no relay).
@@ -332,11 +337,16 @@ namespace NORS.Plugin.UI
             {
                 GUILayout.Label(
                     LocalIsHost ? "<color=#7CFC7C>You host this game — Ban/Unban moderate your players</color>"
-                    : CanModerate ? "<color=#7CFC7C>You are a listed moderator — Ban/Unban apply for everyone who lists you</color>"
+                    : CanModerate ? $"<color=#7CFC7C>You are a listed moderator</color> <color=#999999>— mutes and bans apply only for players whose own list includes you ({ModeratorCount} listed here{ModeratorSource})</color>"
                     // On a dedicated server there is no host player at all, so saying "the host
                     // moderates" would point people at somebody who doesn't exist.
+                    // On a dedicated server there IS no host player, so the only thing that can be
+                    // true is the trust list — and saying how many you honour is the one way to
+                    // tell "moderation is set up" from "moderation silently does nothing".
                     : UdpTransport || MySteamId == 0
-                        ? "<color=#999999>P2P voice — moderated by the Steam ids in Moderation/Moderators</color>"
+                        ? (ModeratorCount > 0
+                            ? $"<color=#999999>P2P voice — honouring {ModeratorCount} moderator(s){ModeratorSource}</color>"
+                            : $"<color={Theme.Hex(Theme.Amber)}>P2P voice — no moderators configured, nobody can mute or ban here</color>")
                         : "<color=#999999>P2P voice — the game host moderates</color>", rich);
             }
             else if (AdminAuthed)

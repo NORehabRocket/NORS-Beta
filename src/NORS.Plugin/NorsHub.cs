@@ -29,6 +29,8 @@ namespace NORS.Plugin
         private readonly VoiceCapture _capture = new VoiceCapture();
         private readonly VoicePlayback _playback = new VoicePlayback();
         private HostBanStore _hostBans;
+        private ModeratorsFile _modFile;
+        private float _nextModFilePoll;
         private readonly MuteStore _mutes = new MuteStore();
         private readonly Packets.MuteEntry[] _muteWire = new Packets.MuteEntry[Packets.MaxMutes];
         private int _appliedMuteRevision = -1;
@@ -84,6 +86,7 @@ namespace NORS.Plugin
             _capture.OnFrame = OnEncodedFrame;
             _userWantsConnection = NorsConfig.AutoConnect.Value;
             _hostBans = new HostBanStore(Path.Combine(Paths.ConfigPath, "nors-host-bans.txt"));
+            _modFile = new ModeratorsFile(Path.Combine(Paths.ConfigPath, ModeratorsFile.FileName));
             _playerVols = new PlayerVolumes(Path.Combine(Paths.ConfigPath, "nors-player-volumes.txt"));
 
             _ui = new RadioPanel(_radios)
@@ -333,7 +336,14 @@ namespace NORS.Plugin
             // Apply every authority's bans (ours included if we are one), then re-broadcast ours.
             // This runs for everyone now, not just the host: on a dedicated server there IS no host
             // player, so gating it on IsHost meant nobody sent bans and nobody applied them.
-            _moderation.Sync(NorsConfig.Moderators.Value);
+            // Config key and drop-in file are merged, so a server can distribute staff without
+            // shipping a whole config over everyone's keybinds and volumes.
+            if (Time.unscaledTime >= _nextModFilePoll)
+            {
+                _nextModFilePoll = Time.unscaledTime + 5f;
+                _modFile.Poll();
+            }
+            _moderation.Sync(NorsConfig.Moderators.Value + "\n" + _modFile.Text);
             bool amMod = CanModerate;
 
             // Expire first, so a mute that just ran out is gone from this frame's effective set
@@ -758,6 +768,8 @@ namespace NORS.Plugin
             _ui.Notices = _notices;
             _ui.MyFactionId = _local.FactionId;
             _ui.MySteamId = _local.SteamId;
+            _ui.ModeratorCount = _moderation.Trusted.Count;
+            _ui.ModeratorSource = _modFile != null && _modFile.Exists ? " from " + ModeratorsFile.FileName : "";
             _ui.LocalIsHost = _local.IsHost;
             _ui.CanModerate = CanModerate;
             _ui.TxFrames = _txFrames;

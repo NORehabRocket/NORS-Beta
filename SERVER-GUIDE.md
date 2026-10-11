@@ -329,8 +329,51 @@ panel to unlock the same controls. Convenient, but passwords get pasted into Dis
 the person you gave them to — prefer the ID list where you can.
 
 > Note on the ID list: it works by each client deciding whose bans it honours. That means players
-> should have your staff's IDs in *their* config too — normally you'd ship that in your modpack.
-> The server's own `AdminPassword` path works regardless of what players have configured.
+> need your staff's IDs on *their* machine too. The server's own `AdminPassword` path works
+> regardless of what players have configured.
+
+#### Distributing the list: `nors-moderators.txt`
+
+Shipping your whole `com.dsr.nors.cfg` to push a moderator list overwrites every player's keybinds,
+mic device and volumes — which is why most communities didn't, and why moderation then quietly did
+nothing on the servers that needed it most.
+
+Instead, drop a single file into `BepInEx/config/nors-moderators.txt`:
+
+```
+# Critz staff
+76561198000000001   # Zookers
+76561198000000002   # Tarragon
+```
+
+One ID per line, `#` starts a comment so you can keep names against them. It is **merged** with
+`Moderation/Moderators`, so either or both work. Updating it touches nothing a player has
+configured, and it **reloads in place** — add staff mid-session and it takes effect within a few
+seconds, with nobody restarting.
+
+Put it in your modpack and your staff can moderate on every client that installs it.
+
+#### Checking it actually works
+
+Moderation failing is otherwise invisible: a moderator sees their buttons and clicks them, and
+nothing happens on anyone else's machine. The radio panel says which side you're on:
+
+- **"You are a listed moderator"** — *you* can issue mutes and bans. It does not mean anyone is
+  honouring them.
+- **"honouring N moderator(s)"** — this client applies moderation from N people. This is the number
+  that matters; it should match your staff list.
+- **"no moderators configured, nobody can mute or ban here"** (amber) — this client honours nobody.
+  If players see this, your list hasn't reached them.
+
+#### Temporary mutes
+
+Moderators can mute for **5, 15 or 60 minutes** instead of banning, with the remaining time shown on
+the roster row so two moderators don't stack mutes on the same person. Mutes are not saved: they end
+when they end, and a restart clears them. Use a ban when it should outlast the session.
+
+Mutes need NORS 0.7.10+ on *both* ends. An older client ignores them entirely rather than
+misreading one as permanent, so a mixed-version lobby degrades safely — but mute somebody on an
+older build and they'll still be audible to the players who haven't updated.
 
 ### Ban storage
 

@@ -66,12 +66,22 @@ namespace NORS.Plugin.Net
             Revision++;
 
             _trusted.Clear();
-            foreach (string part in configValue.Split(',', ';', ' ', '\t', '\n', '\r'))
+            // Line-oriented so the drop-in file can carry '# name' comments against each id, while
+            // still accepting the flat comma-separated form the config key has always used.
+            foreach (string rawLine in configValue.Split('\n', '\r'))
             {
-                string s = part.Trim();
-                if (s.Length == 0) continue;
-                if (ulong.TryParse(s, out ulong id) && id != 0) _trusted.Add(id);
-                else NorsPlugin.Log.LogWarning($"NORS: ignoring unparseable moderator entry '{s}' (expected a Steam id).");
+                string line = rawLine;
+                int hash = line.IndexOf('#');
+                if (hash >= 0) line = line.Substring(0, hash);
+                if (line.Trim().Length == 0) continue;
+
+                foreach (string part in line.Split(',', ';', ' ', '\t'))
+                {
+                    string s = part.Trim();
+                    if (s.Length == 0) continue;
+                    if (ulong.TryParse(s, out ulong id) && id != 0) _trusted.Add(id);
+                    else NorsPlugin.Log.LogWarning($"NORS: ignoring unparseable moderator entry '{s}' (expected a Steam id).");
+                }
             }
 
             // Bans from someone who just lost trust must stop applying immediately.
